@@ -1,0 +1,415 @@
+# Kotlin Clean Architecture Guidelines
+
+## Project Structure
+- core: Domain entities, interfaces and business rules
+- usecases: Application use cases interfaces and implementations
+- dataproviders: External adapters interfaces and implementations
+- presentation: Web controllers interfaces, implementations and framework configuration
+
+## Technology Stack
+- Framework: Spring Boot 3.2.3 with Kotlin 1.9.22
+- Build Tool: Maven
+- JDK Version: 21
+- Key Dependencies: Spring Cloud, Spring Retry, Resilience4j
+
+## Architecture Guidelines
+
+### Core Module
+1. Contains only pure domain logic and interfaces
+2. No framework dependencies
+3. Use data classes for entities
+4. Use sealed classes for representing domain states
+5. Define all interfaces for ports (repository, service, event)
+6. No Spring annotations or dependencies
+7. Follow Interface Segregation Principle (ISP)
+8. Use Value Objects for domain concepts
+9. Keep domain logic pure and testable
+10. Use domain events for cross-aggregate communication
+11. Define interfaces for all external interactions
+12. Use abstract classes for shared behavior
+13. Define interfaces for all domain services
+14. Use interfaces for all event publishers
+15. Define interfaces for all value object validations
+
+Example:
+```kotlin
+interface ExampleRepository {
+    fun getByExampleCode(exampleCode: ExampleCode): Example?
+    fun save(example: Example)
+}
+
+interface ExampleService {
+    fun validateExample(example: Example): ValidationResult
+    fun processExample(example: Example): ProcessingResult
+}
+
+interface ExampleEventPublisher {
+    fun publish(event: ExampleEvent)
+}
+
+interface ExampleValidator {
+    fun validate(example: Example): ValidationResult
+}
+
+abstract class BaseExampleValidator : ExampleValidator {
+    protected abstract fun validateSpecificRules(example: Example): ValidationResult
+    
+    override fun validate(example: Example): ValidationResult {
+        val basicValidation = validateBasicRules(example)
+        return if (basicValidation.isValid) validateSpecificRules(example) else basicValidation
+    }
+    
+    private fun validateBasicRules(example: Example): ValidationResult {
+        // Basic validation logic
+    }
+}
+
+data class Example(
+    val code: ExampleCode,
+    val description: String,
+    val price: BigDecimal,
+    val createdAt: LocalDateTime?
+)
+
+data class ExampleCode(val value: String) {
+    init {
+        require(value.isNotBlank()) { "Code cannot be blank" }
+    }
+}
+
+sealed class ExampleEvent {
+    data class Created(val example: Example) : ExampleEvent()
+    data class Updated(val example: Example) : ExampleEvent()
+}
+
+sealed class ValidationResult {
+    data class Valid(val example: Example) : ValidationResult()
+    data class Invalid(val errors: List<String>) : ValidationResult()
+}
+
+sealed class ProcessingResult {
+    data class Success(val example: Example) : ProcessingResult()
+    data class Failure(val error: String) : ProcessingResult()
+}
+```
+
+### Usecases Module
+1. Define interfaces for all use cases
+2. Depends only on core module interfaces
+3. Use interfaces for use case definitions
+4. Implement use cases in separate classes
+5. Use coroutines for async operations
+6. Use Result<T> for error handling
+7. No Spring annotations or dependencies
+8. UseCaseExecutor should be an interface
+9. Follow Single Responsibility Principle (SRP)
+10. Use Command Query Responsibility Segregation (CQRS)
+11. Implement use cases as pure functions
+12. Use dependency injection through interfaces
+13. Handle domain events through interfaces
+14. Define interfaces for all use case results
+15. Use interfaces for all use case validators
+
+Example:
+```kotlin
+interface UseCase<in Request, out Response> {
+    fun execute(request: Request): Response
+}
+
+interface UseCaseExecutor {
+    fun <RequestDto, Request, Response, ResponseDto> execute(
+        useCase: UseCase<Request, Response>,
+        requestDto: RequestDto,
+        requestConverter: (RequestDto) -> Request,
+        responseConverter: (Response) -> ResponseDto
+    ): ResponseDto
+}
+
+interface GetExampleByIdUseCase : UseCase<ExampleCode, Example> {
+    override fun execute(request: ExampleCode): Example
+}
+
+interface CreateExampleUseCase : UseCase<Example, Unit> {
+    override fun execute(request: Example)
+}
+
+class GetExampleByIdUseCaseImpl(
+    private val exampleRepository: ExampleRepository,
+    private val eventPublisher: ExampleEventPublisher
+) : GetExampleByIdUseCase {
+    override fun execute(request: ExampleCode): Example {
+        val example = exampleRepository.getByExampleCode(request) 
+            ?: throw NotFoundException("No example for code: $request")
+        
+        eventPublisher.publish(ExampleEvent.Updated(example))
+        return example
+    }
+}
+
+class CreateExampleUseCaseImpl(
+    private val exampleRepository: ExampleRepository,
+    private val eventPublisher: ExampleEventPublisher,
+    private val validator: ExampleValidator
+) : CreateExampleUseCase {
+    override fun execute(request: Example) {
+        when (val validation = validator.validate(request)) {
+            is ValidationResult.Valid -> {
+                exampleRepository.save(request)
+                eventPublisher.publish(ExampleEvent.Created(request))
+            }
+            is ValidationResult.Invalid -> throw ValidationException(validation.errors.joinToString())
+        }
+    }
+}
+```
+
+### Dataproviders Module
+1. Define interfaces for all adapters
+2. Depends only on core module interfaces
+3. Implement repository interfaces from core
+4. Handle external service errors appropriately
+5. No Spring configuration classes
+6. Use retry mechanisms with Resilience4j
+7. For JPA:
+   - Define interfaces for all JPA repositories
+   - No Spring annotations in entities
+   - No Spring configuration
+   - Keep JPA specific code isolated
+8. Follow Open/Closed Principle (OCP)
+9. Use adapter pattern for external services
+10. Implement repository interfaces with proper error handling
+11. Use circuit breakers for external services
+12. Implement proper transaction management
+13. Use proper mapping between domain and persistence models
+14. Define interfaces for all external service clients
+15. Use interfaces for all data mappers
+
+Example:
+```kotlin
+interface DBExampleRepository : JpaRepository<ExampleEntity, String>
+
+interface ExampleEntityMapper {
+    fun toExample(entity: ExampleEntity): Example
+    fun toExampleEntity(example: Example): ExampleEntity
+}
+
+interface ExternalServiceClient {
+    fun fetchData(code: String): ExternalData
+    fun sendData(data: ExternalData): Result
+}
+
+@Entity
+@Table(name = "example")
+data class ExampleEntity(
+    @Id
+    val code: String,
+    val description: String,
+    val price: BigDecimal,
+    val createdAt: Long
+)
+
+open class JpaExampleRepositoryImpl(
+    private val dbExampleRepository: DBExampleRepository,
+    private val eventPublisher: ExampleEventPublisher,
+    private val mapper: ExampleEntityMapper
+) : ExampleRepository {
+    override fun getByExampleCode(exampleCode: ExampleCode) =
+        dbExampleRepository.findById(exampleCode.value)
+            .map { mapper.toExample(it) }
+            .orElse(null)
+
+    override fun save(example: Example) {
+        dbExampleRepository.save(mapper.toExampleEntity(example))
+        eventPublisher.publish(ExampleEvent.Updated(example))
+    }
+}
+
+class ExternalServiceClientImpl(
+    private val webClient: WebClient,
+    private val circuitBreaker: CircuitBreaker
+) : ExternalServiceClient {
+    override fun fetchData(code: String): ExternalData {
+        return circuitBreaker.executeSupplier {
+            webClient.get()
+                .uri("/data/$code")
+                .retrieve()
+                .bodyToMono(ExternalData::class.java)
+                .block() ?: throw ExternalServiceException("Data not found")
+        }
+    }
+}
+```
+
+### Presentation Module
+1. Define interfaces for all controllers
+2. Contains all Spring configuration
+3. Coordinates dependency injection
+4. Configures JPA, security, etc
+5. Handles errors with @RestControllerAdvice
+6. Use proper HTTP status codes
+7. Document APIs with OpenAPI
+8. Validate inputs with Bean Validation
+9. Follow Dependency Inversion Principle (DIP)
+10. Use proper DTOs for request/response
+11. Implement proper error handling
+12. Use proper HTTP methods and status codes
+13. Implement proper security configuration
+14. Use proper validation annotations
+15. Implement proper API documentation
+16. Define interfaces for all DTO mappers
+17. Use interfaces for all configuration classes
+
+Example:
+```kotlin
+interface ExampleResource {
+    @GetMapping("/{code}")
+    fun getExampleByCode(@PathVariable code: String): ResponseEntity<ExampleDto>
+    
+    @PostMapping
+    fun createExample(@RequestBody request: ExampleDto): ResponseEntity<Unit>
+}
+
+interface ExampleDtoMapper {
+    fun toExampleDto(example: Example): ExampleDto
+    fun toExample(dto: ExampleDto): Example
+}
+
+@Configuration
+interface JpaConfig {
+    @Bean
+    fun jpaTransactionManager(entityManagerFactory: EntityManagerFactory): PlatformTransactionManager
+}
+
+@Configuration
+interface UseCaseConfig {
+    @Bean
+    fun exampleRepository(
+        dbExampleRepository: DBExampleRepository,
+        eventPublisher: ExampleEventPublisher,
+        mapper: ExampleEntityMapper
+    ): ExampleRepository
+    
+    @Bean
+    fun getExampleByIdUseCase(
+        exampleRepository: ExampleRepository,
+        eventPublisher: ExampleEventPublisher
+    ): GetExampleByIdUseCase
+}
+
+@RestController
+@RequestMapping("/examples")
+class ExampleResourceImpl(
+    private val useCaseExecutor: UseCaseExecutor,
+    private val getExampleByIdUseCase: GetExampleByIdUseCase,
+    private val createExampleUseCase: CreateExampleUseCase,
+    private val mapper: ExampleDtoMapper
+) : ExampleResource {
+    override fun getExampleByCode(@PathVariable code: String) =
+        useCaseExecutor.execute(
+            useCase = getExampleByIdUseCase,
+            requestDto = code,
+            requestConverter = { ExampleCode(it) },
+            responseConverter = { mapper.toExampleDto(it) }
+        )
+
+    override fun createExample(@RequestBody request: ExampleDto) =
+        useCaseExecutor.execute(
+            useCase = createExampleUseCase,
+            requestDto = request,
+            requestConverter = { mapper.toExample(it) },
+            responseConverter = { Unit }
+        )
+}
+```
+
+### Error Handling
+Use sealed class hierarchy for errors:
+```kotlin
+interface ErrorHandler {
+    fun handle(error: DomainError): ResponseEntity<*>
+}
+
+sealed class DomainError {
+    data class NotFound(override val message: String) : DomainError()
+    data class Validation(override val message: String) : DomainError()
+    data class Infrastructure(override val message: String) : DomainError()
+}
+
+@ControllerAdvice
+class GlobalExceptionHandler : ErrorHandler {
+    @ExceptionHandler(DomainError::class)
+    override fun handle(error: DomainError) = when (error) {
+        is DomainError.NotFound -> ResponseEntity.notFound().build()
+        is DomainError.Validation -> ResponseEntity.badRequest().body(error.message)
+        is DomainError.Infrastructure -> ResponseEntity.internalServerError().body(error.message)
+    }
+}
+```
+
+### Testing
+1. Use JUnit 5 with MockK
+2. Test each layer independently
+3. Use proper naming convention: given_when_then
+4. Mock external dependencies
+5. Use test containers for integration tests
+6. Keep test configuration in presentation module
+7. Test domain logic in isolation
+8. Test use cases with proper mocks
+9. Test adapters with proper test containers
+10. Test presentation layer with proper test utilities
+11. Use proper test coverage
+12. Implement proper test documentation
+13. Define interfaces for all test utilities
+14. Use interfaces for all test data builders
+15. Implement proper test isolation
+
+Example:
+```kotlin
+interface ExampleTestDataBuilder {
+    fun buildExample(code: String = "123", description: String = "test"): Example
+    fun buildExampleDto(code: String = "123", description: String = "test"): ExampleDto
+}
+
+@Test
+fun shouldReturnExample_whenFound() {
+    // given
+    val example = ExampleTestDataBuilder.buildExample()
+    coEvery { exampleRepository.getByExampleCode(any()) } returns example
+    coEvery { eventPublisher.publish(any()) } just Runs
+
+    // when
+    val result = useCase.execute(ExampleCode("123"))
+
+    // then
+    assertEquals(example, result)
+    coVerify { eventPublisher.publish(ExampleEvent.Updated(example)) }
+}
+```
+
+### Kotlin-Specific Best Practices
+1. Naming Conventions:
+   - Use camelCase for properties and functions
+   - Use PascalCase for classes and interfaces
+   - Use UPPER_SNAKE_CASE for constants
+   - Suffix implementations with 'Impl' (e.g., ExampleResourceImpl)
+
+2. Code Organization:
+   - One class per file
+   - Package by feature, not by layer
+   - Use internal visibility when possible
+   - Keep files under 200 lines
+   - Group extensions with their related classes
+
+3. Functional Programming:
+   - Prefer immutable data structures
+   - Use sequence for large collections processing
+   - Leverage higher-order functions
+   - Use function types for callbacks
+   - Implement proper error handling with exceptions
+
+4. Spring Boot Integration:
+   - Keep Spring configuration in presentation module
+   - Use constructor injection
+   - Configure proper null safety
+   - Use OpenAPI for documentation
+   - Implement proper configuration properties 

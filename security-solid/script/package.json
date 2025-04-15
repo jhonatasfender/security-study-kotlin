@@ -1,0 +1,16 @@
+{
+  "name": "security-solid-tests",
+  "version": "1.0.0",
+  "description": "Test scripts for security-solid project",
+  "main": "test.js",
+  "type": "module",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "dependencies": {
+    "axios": "^1.6.7",
+    "chalk": "^5.3.0",
+    "ora": "^6.3.1",
+    "@faker-js/faker": "^8.4.1"
+  }
+} 

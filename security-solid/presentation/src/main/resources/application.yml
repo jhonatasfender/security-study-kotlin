@@ -1,0 +1,69 @@
+spring:
+  datasource:
+    url: jdbc:h2:mem:securitydb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password: 
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: validate
+      show-sql: true
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+  flyway:
+    enabled: true
+    baseline-on-migrate: true
+    locations: classpath:db/migration
+    table: flyway_schema_history
+
+server:
+  port: 8080
+
+jwt:
+  secret: ${JWT_SECRET:your-256-bit-secret-key-must-be-at-least-32-characters-long}
+  access-token-expiration: 900000 # 15 minutes
+  refresh-token-expiration: 604800000 # 7 days
+
+logging:
+  level:
+    org.springframework.security: DEBUG
+    com.security: DEBUG
+    org.flywaydb: DEBUG
+    org.springdoc: INFO
+
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+    tagsSorter: alpha
+    tryItOutEnabled: true
+    filter: true
+    persistAuthorization: true
+    displayRequestDuration: true
+    deepLinking: true
+    defaultModelsExpandDepth: 1
+    defaultModelExpandDepth: 1
+    defaultModelRendering: model
+    displayOperationId: false
+    showExtensions: true
+    showCommonExtensions: true
+    docExpansion: none
+    syntaxHighlight:
+      activate: true
+      theme: monokai
+  api-docs:
+    path: /v3/api-docs
+  default-consumes-media-type: application/json
+  default-produces-media-type: application/json
+  show-actuator: false
+  packages-to-scan: com.security.presentation
+  paths-to-match: /api/**
+
+security:
+  user:
+    account-non-expired: true
+    credentials-non-expired: true
+    account-non-locked: true 
